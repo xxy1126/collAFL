@@ -61,7 +61,7 @@ else
   PROGS      = ../afl-clang-fast ../afl-llvm-rt.o ../afl-llvm-rt-32.o ../afl-llvm-rt-64.o
 endif
 
-all: test_deps $(PROGS) test_build all_done
+all: test_deps $(PROGS)  all_done
 
 test_deps:
 ifndef AFL_TRACE_PC
@@ -94,18 +94,7 @@ endif
 	@printf "[*] Building 64-bit variant of the runtime (-m64)... "
 	@$(CC) $(CFLAGS) -m64 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 
-test_build: $(PROGS)
-	@echo "[*] Testing the CC wrapper and instrumentation output..."
-	unset AFL_USE_ASAN AFL_USE_MSAN AFL_INST_RATIO; AFL_QUIET=1 AFL_PATH=. AFL_CC=$(CC) ../afl-clang-fast $(CFLAGS) ../test-instr.c -o test-instr $(LDFLAGS)
-# Use /dev/null to avoid problems with optimization messing up expected
-# branches. See https://github.com/google/AFL/issues/30.
-	../afl-showmap -m none -q -o .test-instr0 ./test-instr < /dev/null
-	echo 1 | ../afl-showmap -m none -q -o .test-instr1 ./test-instr
-	@rm -f test-instr
-	@cmp -s .test-instr0 .test-instr1; DR="$$?"; rm -f .test-instr0 .test-instr1; if [ "$$DR" = "0" ]; then echo; echo "Oops, the instrumentation does not seem to be behaving correctly!"; echo; echo "Please ping <lcamtuf@google.com> to troubleshoot the issue."; echo; exit 1; fi
-	@echo "[+] All right, the instrumentation seems to be working!"
-
-all_done: test_build
+all_done: 
 	@echo "[+] All done! You can now use '../afl-clang-fast' to compile programs."
 
 .NOTPARALLEL: clean

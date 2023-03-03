@@ -30,18 +30,13 @@
 */
 
 #define AFL_LLVM_PASS
-#define DEBUG 1 
+
 #include "../config.h"
 #include "../debug.h"
 
-#include <vector>
-#include <map>
-#include <set> 
-#include <iostream> 
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <algorithm>
 
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/IRBuilder.h"
@@ -49,24 +44,8 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
-#include "llvm/IR/CFG.h"
-#include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/Value.h"
 
 using namespace llvm;
-using namespace std; 
-
-vector<BasicBlock*> BBs, MultiBBs, SingleBBs; 
-map<BasicBlock*, vector<BasicBlock*>> Preds; 
-map<BasicBlock*, uint64_t> Keys; 
-
-map<BasicBlock*, uint64_t> SingleHash; 
-set<uint64_t> Hashes; 
-map<BasicBlock*, array<uint64_t ,3>> Params; 
-vector<BasicBlock*> Solv, UnSolv; 
-map<pair<uint64_t, uint64_t>, uint64_t> HashMap; 
-set<uint64_t> FreeHashes; 
 
 namespace {
 
@@ -78,10 +57,7 @@ namespace {
       AFLCoverage() : ModulePass(ID) { }
 
       bool runOnModule(Module &M) override;
-      void AssignUniqueRandomKeysToBBs(); 
-      void CalcFmul(); 
-      void CalcFhash();
-      uint64_t RandomPopFreeHashes();  
+
       // StringRef getPassName() const override {
       //  return "American Fuzzy Lop Instrumentation";
       // }
@@ -92,78 +68,6 @@ namespace {
 
 
 char AFLCoverage::ID = 0;
-
-void AFLCoverage::AssignUniqueRandomKeysToBBs() {
-  uint64_t key = 0; 
-  for(auto &BB: BBs) {
-    Keys[&*BB] = key;  
-    key += 1; 
-  }
-}
-
-void AFLCoverage::CalcFmul() {
-  for(uint64_t y = 1; y <= MAP_SIZE_POW2; y++) {
-    Hashes.clear(); 
-    Params.clear(); 
-    Solv.clear(), UnSolv.clear(); 
-
-    for(auto &bb_it: MultiBBs) {
-      BasicBlock* BB= &*bb_it; 
-      for(uint64_t x = 1; x <= MAP_SIZE_POW2; x++) {
-        for(uint64_t z = 1; z <= MAP_SIZE_POW2; z++) {
-          set<uint64_t> tmpHashSet; 
-          uint64_t cur = Keys[BB]; 
-          for(auto &p: Preds[BB]) {
-            BasicBlock* predBB= &*p; 
-            uint64_t edgeHash = (cur >> x) xor (Keys[predBB] >> y) + z; 
-            tmpHashSet.insert(edgeHash);  
-          }    
-
-          set<uint64_t> interactionSet; 
-          set_intersection(tmpHashSet.begin(), tmpHashSet.end(), Hashes.begin(), Hashes.end(), inserter(interactionSet, interactionSet.begin())); 
-          if(tmpHashSet.size() == Preds[BB].size() && interactionSet.empty()) {
-            Solv.push_back(BB); 
-            Params[BB] = {x, y, z}; 
-            Hashes.insert(tmpHashSet.begin(), tmpHashSet.end()); 
-          }
-        }
-      }
-
-      UnSolv.push_back(BB); 
-    }
-
-    if(UnSolv.empty() || (UnSolv.size()/BBs.size()) < 0.0001) {
-      break; 
-    }
-  }
-}
-
-uint64_t AFLCoverage::RandomPopFreeHashes() {
-  uint64_t randomHash = *FreeHashes.begin(); 
-  FreeHashes.erase(randomHash); 
-  return randomHash; 
-}
-void AFLCoverage::CalcFhash() {
-  //create FreeHashes 
-  for(uint64_t hash=1 ; hash < MAP_SIZE; hash++) {
-    if(Hashes.count(hash) != 0) {
-      continue ; 
-    }
-    FreeHashes.insert(hash); 
-  }
-
-#ifdef DEBUG 
-  cout << "Hashes size: " << Hashes.size() << endl; 
-  cout << "FreeHashes size: " << FreeHashes.size() << endl; 
-#endif 
-
-  for(auto &BB: UnSolv) {
-    uint64_t cur = Keys[&*BB];  
-    for(auto &P: Preds[&*BB]) {
-      HashMap[make_pair(cur, Keys[&*P])] = RandomPopFreeHashes(); 
-    }
-  }
-}
 
 
 bool AFLCoverage::runOnModule(Module &M) {
@@ -207,48 +111,56 @@ bool AFLCoverage::runOnModule(Module &M) {
       M, Int32Ty, false, GlobalValue::ExternalLinkage, 0, "__afl_prev_loc",
       0, GlobalVariable::GeneralDynamicTLSModel, 0, false);
 
-  //step1 create BBs, SingleBBs, MultiBBs, Preds 
+  /* Instrument all the things! */
+
   int inst_blocks = 0;
- 
-  for (auto &F : M) {
-    for(Function::iterator B = F.begin(), B_end = F.end(); B != B_end; B++) {
-      BasicBlock* BB = &*B; 
-      BBs.push_back(BB); 
 
-      if(BB->hasNPredecessors(1)) {
-        SingleBBs.push_back(BB);
-      } else {
-        MultiBBs.push_back(BB); 
-      }
+  for (auto &F : M)
+    for (auto &BB : F) {
 
-      for(auto it = pred_begin(BB), it_end = pred_end(BB); it != it_end; it ++) {
-        Preds[BB].push_back(*it); 
-      }
+      BasicBlock::iterator IP = BB.getFirstInsertionPt();
+      IRBuilder<> IRB(&(*IP));
+
+      if (AFL_R(100) >= inst_ratio) continue;
+
+      /* Make up cur_loc */
+
+      unsigned int cur_loc = AFL_R(MAP_SIZE);
+
+      ConstantInt *CurLoc = ConstantInt::get(Int32Ty, cur_loc);
+
+      /* Load prev_loc */
+
+      LoadInst *PrevLoc = IRB.CreateLoad(AFLPrevLoc);
+      PrevLoc->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+      Value *PrevLocCasted = IRB.CreateZExt(PrevLoc, IRB.getInt32Ty());
+
+      /* Load SHM pointer */
+
+      LoadInst *MapPtr = IRB.CreateLoad(AFLMapPtr);
+      MapPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+      Value *MapPtrIdx =
+          IRB.CreateGEP(MapPtr, IRB.CreateXor(PrevLocCasted, CurLoc));
+
+      /* Update bitmap */
+
+      LoadInst *Counter = IRB.CreateLoad(MapPtrIdx);
+      Counter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+      Value *Incr = IRB.CreateAdd(Counter, ConstantInt::get(Int8Ty, 1));
+      IRB.CreateStore(Incr, MapPtrIdx)
+          ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+
+      /* Set prev_loc to cur_loc >> 1 */
+
+      StoreInst *Store =
+          IRB.CreateStore(ConstantInt::get(Int32Ty, cur_loc >> 1), AFLPrevLoc);
+      Store->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+
+      inst_blocks++;
+
     }
-  }
-#ifdef DEBUG 
-  cout << "BBs: "<< BBs.size() << endl; 
-  cout << "SingleBBs: " << SingleBBs.size() << endl; 
-  cout << "MultiBBs: " << MultiBBs.size() << endl; 
-#endif
 
-  //step2 create Keys 
-  AssignUniqueRandomKeysToBBs(); 
-
-  //step3 calc_fmul 
-  CalcFmul(); 
-
-  //step4 calc_Fhash 
-  CalcFhash();
-
- //step5 InstrumentFmul 
-  
-  
-#ifdef DEBUG
-  for(auto &BB: MultiBBs) {
-    printf("%lu %lu %lu\n", Params[&*BB][0], Params[&*BB][1], Params[&*BB][2]); 
-  }
-#endif
+  /* Say something nice. */
 
   if (!be_quiet) {
 
