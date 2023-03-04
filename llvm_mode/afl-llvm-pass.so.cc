@@ -110,7 +110,7 @@ bool AFLCoverage::isIntersection(set<uint32_t> &a, set <uint32_t> &b) {
 }
 
 void AFLCoverage::CalcFmul() {
-  for(uint32_t y = 1; y <= MAP_SIZE_POW2; y++) {
+  for(uint32_t y = 1; y < MAP_SIZE_POW2; y++) {
     Hashes.clear(); 
     Params.clear(); 
     Solv.clear();
@@ -119,11 +119,11 @@ void AFLCoverage::CalcFmul() {
     for(auto &bb_it: MultiBBs) {
       BasicBlock* BB= &*bb_it; 
       bool find_one = false; 
-      for(uint32_t x = 1; x <= MAP_SIZE_POW2; x++) {
+      for(uint32_t x = 1; x < MAP_SIZE_POW2; x++) {
         if(find_one) {
           break; 
         }
-        for(uint32_t z = 1; z <= MAP_SIZE_POW2; z++) {
+        for(uint32_t z = 1; z < MAP_SIZE_POW2; z++) {
           set<uint32_t> tmpHashSet; 
           uint32_t cur = Keys[BB]; 
 // #ifdef DEBUG
@@ -138,8 +138,7 @@ void AFLCoverage::CalcFmul() {
 //             cout << edgeHash << " " << endl; 
 // #endif  
             tmpHashSet.insert(edgeHash);  
-          }
-          cout << endl;     
+          }   
 
 // #ifdef DEBUG 
 //   cout << "tmpHashSet size: " << tmpHashSet.size() << endl; 
@@ -161,7 +160,7 @@ void AFLCoverage::CalcFmul() {
       }
     }
 
-    if(UnSolv.empty()) {
+    if(UnSolv.empty() || ((double)UnSolv.size() / (UnSolv.size() + Solv.size())) < 1.0) {
       globalY = y;
       break; 
     }
@@ -271,29 +270,29 @@ bool AFLCoverage::runOnModule(Module &M) {
   //step5 calc_Fsingle 
   CalcFsingle(); 
 
-#ifdef DEBUG 
-  cout << "BBs: "<< BBs.size() << endl; 
-  cout << "SingleBBs: " << SingleBBs.size() << endl; 
-  cout << "MultiBBs: " << MultiBBs.size() << endl; 
+// #ifdef DEBUG 
+//   cout << "BBs: "<< BBs.size() << endl; 
+//   cout << "SingleBBs: " << SingleBBs.size() << endl; 
+//   cout << "MultiBBs: " << MultiBBs.size() << endl; 
   cout << "Solv: " << Solv.size() << endl; 
   cout << "Unsolv: " << UnSolv.size() << endl; 
-  cout << "Hashes: " << Hashes.size() << endl; 
+//   cout << "Hashes: " << Hashes.size() << endl; 
 
-  for(auto &BB: MultiBBs) {
-    printf("%u %u\n", Params[&*BB][0], Params[&*BB][1]); 
-  }
+//   for(auto &BB: MultiBBs) {
+//     printf("%u %u\n", Params[&*BB][0], Params[&*BB][1]); 
+//   }
 
-  cout << "GlobalY" << globalY << endl; 
+//   cout << "GlobalY" << globalY << endl; 
 
-  for(auto &i: Hashes) {
-    cout << i << endl; 
-  }
-#endif
+//   for(auto &i: Hashes) {
+//     cout << i << endl; 
+//   }
+// #endif
 
   //step6 instrument Fsingle 
 
   for(auto &BB: BBs) {
-    BasicBlock::iterator IP = BB.getFirstInsertionPt(); 
+    BasicBlock::iterator IP = BB->getFirstInsertionPt(); 
     IRBuilder<> IRB(&*IP); 
 
     //make up cur_loc 
@@ -319,6 +318,8 @@ bool AFLCoverage::runOnModule(Module &M) {
       Cur_loc = ConstantInt::get(Int32Ty, cur_loc>>x); 
       Value *temp = IRB.CreateXor(PrevLocCasted, Cur_loc); 
       MapPtrIdx = IRB.CreateGEP(MapPtr, IRB.CreateAdd(temp, ConstantInt::get(Int32Ty, z))); 
+    } else {
+      continue ; 
     }
 
 
@@ -328,30 +329,21 @@ bool AFLCoverage::runOnModule(Module &M) {
     Value* bitmap_update = IRB.CreateAdd(bitmap, ConstantInt::get(Int8Ty, 1)) ; 
     IRB.CreateStore(bitmap_update, MapPtrIdx)->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
     
-    //save prev_loc  
-    StoreInst *Store =
-          IRB.CreateStore(ConstantInt::get(Int32Ty, cur_loc >> globalY), AFLPrevLoc);
-    Store->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+    // //save prev_loc  
+    // StoreInst *Store =
+    //       IRB.CreateStore(ConstantInt::get(Int32Ty, cur_loc >> globalY), AFLPrevLoc);
+    // Store->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 
     inst_blocks ++; 
   }
 
   //fhash 
-  // for(auto &BB: UnSolv) {
-  //   BasicBlock::iterator IP = BB.getFirstInsertionPt(); 
-  //   IRBuilder<> IRB(&*IP); 
-
-  //   //make up cur_loc 
-  //   uint32_t cur_loc = Keys[&*BB]; 
-  //   ConstantInt *Cur_loc = ConstantInt::get(Int32Ty, cur_loc); 
-  //   //prev 
-  //   LoadInst *PrevLoc = IRB.CreateLoad(AFLPrevLoc); 
-  //   PrevLoc->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None)); 
-  //   Value *PrevLocCasted = IRB.CreateZExt(PrevLoc, IRB.getInt32Ty());  
-
-  //   // user <cur, prev> to get hash_map 
-
-  // }
+  for(auto &BB: UnSolv) {
+    BasicBlock::iterator IP = BB.getFirstInsertionPt(); 
+    IRBuilder<> IRB(&*IP); 
+    // user <cur, prev> to get hash_map 
+    
+  }
 
 
 
