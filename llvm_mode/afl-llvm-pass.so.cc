@@ -30,7 +30,7 @@
 */
 
 #define AFL_LLVM_PASS
-#define DEBUG 1 
+#define DEBUG 0 
 #include "../config.h"
 #include "../debug.h"
 
