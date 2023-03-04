@@ -126,25 +126,25 @@ void AFLCoverage::CalcFmul() {
         for(uint32_t z = 1; z <= MAP_SIZE_POW2; z++) {
           set<uint32_t> tmpHashSet; 
           uint32_t cur = Keys[BB]; 
-#ifdef DEBUG
-          cout << "MultiBB***** " << endl;
-#endif 
+// #ifdef DEBUG
+//           cout << "MultiBB***** " << endl;
+// #endif 
           for(auto &p: Preds[BB]) {
             BasicBlock* predBB= &*p; 
             uint32_t edgeHash = (cur >> x) xor (Keys[predBB] >> y) + z; 
-#ifdef DEBUG 
-            cout << "cur: " << cur << " prev: " << Keys[predBB] << endl; 
-            cout << "x: " << x << " y: " << y << " z: " << z << endl; 
-            cout << edgeHash << " " << endl; 
-#endif  
+// #ifdef DEBUG 
+//             cout << "cur: " << cur << " prev: " << Keys[predBB] << endl; 
+//             cout << "x: " << x << " y: " << y << " z: " << z << endl; 
+//             cout << edgeHash << " " << endl; 
+// #endif  
             tmpHashSet.insert(edgeHash);  
           }
           cout << endl;     
 
-#ifdef DEBUG 
-  cout << "tmpHashSet size: " << tmpHashSet.size() << endl; 
-  cout << "PredsBB size: " << Preds[BB].size() << endl; 
-#endif 
+// #ifdef DEBUG 
+//   cout << "tmpHashSet size: " << tmpHashSet.size() << endl; 
+//   cout << "PredsBB size: " << Preds[BB].size() << endl; 
+// #endif 
           if(tmpHashSet.size() == Preds[BB].size() && isIntersection(tmpHashSet, Hashes)) {
             Solv.push_back(BB); 
             Params[BB] = {x,z}; 
@@ -171,6 +171,7 @@ void AFLCoverage::CalcFmul() {
 uint32_t AFLCoverage::RandomPopFreeHashes() {
   uint32_t randomHash = *FreeHashes.begin(); 
   FreeHashes.erase(randomHash); 
+  Hashes.insert(randomHash); 
   return randomHash; 
 }
 void AFLCoverage::CalcFhash() {
@@ -283,12 +284,16 @@ bool AFLCoverage::runOnModule(Module &M) {
   }
 
   cout << "GlobalY" << globalY << endl; 
+
+  for(auto &i: Hashes) {
+    cout << i << endl; 
+  }
 #endif
 
   //step6 instrument Fsingle 
 
   for(auto &BB: BBs) {
-    BasicBlock::iterator IP = BB->getFirstInsertionPt(); 
+    BasicBlock::iterator IP = BB.getFirstInsertionPt(); 
     IRBuilder<> IRB(&*IP); 
 
     //make up cur_loc 
@@ -300,6 +305,7 @@ bool AFLCoverage::runOnModule(Module &M) {
     PrevLoc->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None)); 
     Value *PrevLocCasted = IRB.CreateZExt(PrevLoc, IRB.getInt32Ty()); 
 
+    //load shm pointer
     LoadInst *MapPtr = IRB.CreateLoad(AFLMapPtr);
     MapPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
     Value * MapPtrIdx= NULL; 
@@ -323,8 +329,10 @@ bool AFLCoverage::runOnModule(Module &M) {
     IRB.CreateStore(bitmap_update, MapPtrIdx)->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
     
     //save prev_loc  
-    IRB.CreateStore(ConstantInt::get(Int32Ty, cur_loc >> globalY), AFLPrevLoc)->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-  
+    StoreInst *Store =
+          IRB.CreateStore(ConstantInt::get(Int32Ty, cur_loc >> globalY), AFLPrevLoc);
+    Store->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+
     inst_blocks ++; 
   }
 
