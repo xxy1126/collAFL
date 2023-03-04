@@ -336,6 +336,22 @@ bool AFLCoverage::runOnModule(Module &M) {
     inst_blocks ++; 
   }
 
+  //fhash 
+  // for(auto &BB: UnSolv) {
+  //   BasicBlock::iterator IP = BB.getFirstInsertionPt(); 
+  //   IRBuilder<> IRB(&*IP); 
+
+  //   //make up cur_loc 
+  //   uint32_t cur_loc = Keys[&*BB]; 
+  //   ConstantInt *Cur_loc = ConstantInt::get(Int32Ty, cur_loc); 
+  //   //prev 
+  //   LoadInst *PrevLoc = IRB.CreateLoad(AFLPrevLoc); 
+  //   PrevLoc->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None)); 
+  //   Value *PrevLocCasted = IRB.CreateZExt(PrevLoc, IRB.getInt32Ty());  
+
+  //   // user <cur, prev> to get hash_map 
+
+  // }
 
 
 
