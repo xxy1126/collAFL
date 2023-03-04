@@ -59,15 +59,15 @@ using namespace std;
 
 vector<BasicBlock*> BBs, MultiBBs, SingleBBs; 
 map<BasicBlock*, vector<BasicBlock*>> Preds; 
-map<BasicBlock*, uint64_t> Keys; 
+map<BasicBlock*, uint32_t> Keys; 
 
-map<BasicBlock*, uint64_t> SingleHash; 
-set<uint64_t> Hashes; 
-map<BasicBlock*, array<uint64_t ,3>> Params; 
+map<BasicBlock*, uint32_t> SingleHash; 
+set<uint32_t> Hashes; 
+map<BasicBlock*, array<uint32_t ,2>> Params; 
 vector<BasicBlock*> Solv, UnSolv; 
-map<pair<uint64_t, uint64_t>, uint64_t> HashMap; 
-set<uint64_t> FreeHashes; 
-
+map<pair<uint32_t, uint32_t>, uint32_t> HashMap; 
+set<uint32_t> FreeHashes; 
+uint32_t globalY; 
 namespace {
 
   class AFLCoverage : public ModulePass {
@@ -81,7 +81,9 @@ namespace {
       void AssignUniqueRandomKeysToBBs(); 
       void CalcFmul(); 
       void CalcFhash();
-      uint64_t RandomPopFreeHashes();  
+      void CalcFsingle(); 
+      uint32_t RandomPopFreeHashes();  
+      bool isIntersection(set<uint32_t> &a, set <uint32_t> &b); 
       // StringRef getPassName() const override {
       //  return "American Fuzzy Lop Instrumentation";
       // }
@@ -94,77 +96,106 @@ namespace {
 char AFLCoverage::ID = 0;
 
 void AFLCoverage::AssignUniqueRandomKeysToBBs() {
-  uint64_t key = 0; 
   for(auto &BB: BBs) {
-    Keys[&*BB] = key;  
-    key += 1; 
+    Keys[&*BB] = AFL_R(MAP_SIZE);  
   }
+}
+bool AFLCoverage::isIntersection(set<uint32_t> &a, set <uint32_t> &b) {
+  for(auto &it_a: a) {
+    if(b.find(it_a) != b.end()) {
+      return false; 
+    } 
+  }
+  return true; 
 }
 
 void AFLCoverage::CalcFmul() {
-  for(uint64_t y = 1; y <= MAP_SIZE_POW2; y++) {
+  for(uint32_t y = 1; y <= MAP_SIZE_POW2; y++) {
     Hashes.clear(); 
     Params.clear(); 
-    Solv.clear(), UnSolv.clear(); 
+    Solv.clear();
+    UnSolv.clear(); 
 
     for(auto &bb_it: MultiBBs) {
       BasicBlock* BB= &*bb_it; 
-      for(uint64_t x = 1; x <= MAP_SIZE_POW2; x++) {
-        for(uint64_t z = 1; z <= MAP_SIZE_POW2; z++) {
-          set<uint64_t> tmpHashSet; 
-          uint64_t cur = Keys[BB]; 
+      bool find_one = false; 
+      for(uint32_t x = 1; x <= MAP_SIZE_POW2; x++) {
+        if(find_one) {
+          break; 
+        }
+        for(uint32_t z = 1; z <= MAP_SIZE_POW2; z++) {
+          set<uint32_t> tmpHashSet; 
+          uint32_t cur = Keys[BB]; 
+#ifdef DEBUG
+          cout << "MultiBB***** " << endl;
+#endif 
           for(auto &p: Preds[BB]) {
             BasicBlock* predBB= &*p; 
-            uint64_t edgeHash = (cur >> x) xor (Keys[predBB] >> y) + z; 
+            uint32_t edgeHash = (cur >> x) xor (Keys[predBB] >> y) + z; 
+#ifdef DEBUG 
+            cout << "cur: " << cur << " prev: " << Keys[predBB] << endl; 
+            cout << "x: " << x << " y: " << y << " z: " << z << endl; 
+            cout << edgeHash << " " << endl; 
+#endif  
             tmpHashSet.insert(edgeHash);  
-          }    
+          }
+          cout << endl;     
 
-          set<uint64_t> interactionSet; 
-          set_intersection(tmpHashSet.begin(), tmpHashSet.end(), Hashes.begin(), Hashes.end(), inserter(interactionSet, interactionSet.begin())); 
-          if(tmpHashSet.size() == Preds[BB].size() && interactionSet.empty()) {
+#ifdef DEBUG 
+  cout << "tmpHashSet size: " << tmpHashSet.size() << endl; 
+  cout << "PredsBB size: " << Preds[BB].size() << endl; 
+#endif 
+          if(tmpHashSet.size() == Preds[BB].size() && isIntersection(tmpHashSet, Hashes)) {
             Solv.push_back(BB); 
-            Params[BB] = {x, y, z}; 
-            Hashes.insert(tmpHashSet.begin(), tmpHashSet.end()); 
+            Params[BB] = {x,z}; 
+            for(auto &i: tmpHashSet) {
+              Hashes.insert(i); 
+            }
+            find_one = 1; 
+            break; 
           }
         }
       }
-
-      UnSolv.push_back(BB); 
+      if(!find_one) {
+        UnSolv.push_back(BB); 
+      }
     }
 
-    if(UnSolv.empty() || (UnSolv.size()/BBs.size()) < 0.0001) {
+    if(UnSolv.empty()) {
+      globalY = y;
       break; 
     }
   }
 }
 
-uint64_t AFLCoverage::RandomPopFreeHashes() {
-  uint64_t randomHash = *FreeHashes.begin(); 
+uint32_t AFLCoverage::RandomPopFreeHashes() {
+  uint32_t randomHash = *FreeHashes.begin(); 
   FreeHashes.erase(randomHash); 
   return randomHash; 
 }
 void AFLCoverage::CalcFhash() {
   //create FreeHashes 
-  for(uint64_t hash=1 ; hash < MAP_SIZE; hash++) {
+  for(uint32_t hash=1 ; hash < MAP_SIZE; hash++) {
     if(Hashes.count(hash) != 0) {
       continue ; 
     }
     FreeHashes.insert(hash); 
   }
 
-#ifdef DEBUG 
-  cout << "Hashes size: " << Hashes.size() << endl; 
-  cout << "FreeHashes size: " << FreeHashes.size() << endl; 
-#endif 
 
   for(auto &BB: UnSolv) {
-    uint64_t cur = Keys[&*BB];  
+    uint32_t cur = Keys[&*BB];  
     for(auto &P: Preds[&*BB]) {
       HashMap[make_pair(cur, Keys[&*P])] = RandomPopFreeHashes(); 
     }
   }
 }
 
+void AFLCoverage::CalcFsingle() {
+  for(auto &BB: SingleBBs) {
+    SingleHash[&*BB] = RandomPopFreeHashes(); 
+  }
+}
 
 bool AFLCoverage::runOnModule(Module &M) {
 
@@ -226,11 +257,6 @@ bool AFLCoverage::runOnModule(Module &M) {
       }
     }
   }
-#ifdef DEBUG 
-  cout << "BBs: "<< BBs.size() << endl; 
-  cout << "SingleBBs: " << SingleBBs.size() << endl; 
-  cout << "MultiBBs: " << MultiBBs.size() << endl; 
-#endif
 
   //step2 create Keys 
   AssignUniqueRandomKeysToBBs(); 
@@ -241,14 +267,70 @@ bool AFLCoverage::runOnModule(Module &M) {
   //step4 calc_Fhash 
   CalcFhash();
 
- //step5 InstrumentFmul 
-  
-  
-#ifdef DEBUG
+  //step5 calc_Fsingle 
+  CalcFsingle(); 
+
+#ifdef DEBUG 
+  cout << "BBs: "<< BBs.size() << endl; 
+  cout << "SingleBBs: " << SingleBBs.size() << endl; 
+  cout << "MultiBBs: " << MultiBBs.size() << endl; 
+  cout << "Solv: " << Solv.size() << endl; 
+  cout << "Unsolv: " << UnSolv.size() << endl; 
+  cout << "Hashes: " << Hashes.size() << endl; 
+
   for(auto &BB: MultiBBs) {
-    printf("%lu %lu %lu\n", Params[&*BB][0], Params[&*BB][1], Params[&*BB][2]); 
+    printf("%u %u\n", Params[&*BB][0], Params[&*BB][1]); 
   }
+
+  cout << "GlobalY" << globalY << endl; 
 #endif
+
+  //step6 instrument Fsingle 
+
+  for(auto &BB: BBs) {
+    BasicBlock::iterator IP = BB->getFirstInsertionPt(); 
+    IRBuilder<> IRB(&*IP); 
+
+    //make up cur_loc 
+    uint32_t cur_loc = Keys[&*BB]; 
+    ConstantInt *Cur_loc = ConstantInt::get(Int32Ty, cur_loc); 
+
+    //load prev_loc  
+    LoadInst *PrevLoc = IRB.CreateLoad(AFLPrevLoc); 
+    PrevLoc->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None)); 
+    Value *PrevLocCasted = IRB.CreateZExt(PrevLoc, IRB.getInt32Ty()); 
+
+    LoadInst *MapPtr = IRB.CreateLoad(AFLMapPtr);
+    MapPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+    Value * MapPtrIdx= NULL; 
+    
+    // fsingle 
+    if(SingleHash.count(&*BB)) {
+      MapPtrIdx = IRB.CreateGEP(MapPtr, ConstantInt::get(Int32Ty, SingleHash[&*BB])); 
+    } else if(Params.count(&*BB)) {
+    // fmul 
+      uint32_t x = Params[&*BB][0], z = Params[&*BB][1]; 
+      Cur_loc = ConstantInt::get(Int32Ty, cur_loc>>x); 
+      Value *temp = IRB.CreateXor(PrevLocCasted, Cur_loc); 
+      MapPtrIdx = IRB.CreateGEP(MapPtr, IRB.CreateAdd(temp, ConstantInt::get(Int32Ty, z))); 
+    }
+
+
+    //update bitmap 
+    LoadInst *bitmap = IRB.CreateLoad(MapPtrIdx); 
+    bitmap->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None)); 
+    Value* bitmap_update = IRB.CreateAdd(bitmap, ConstantInt::get(Int8Ty, 1)) ; 
+    IRB.CreateStore(bitmap_update, MapPtrIdx)->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+    
+    //save prev_loc  
+    IRB.CreateStore(ConstantInt::get(Int32Ty, cur_loc >> globalY), AFLPrevLoc)->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+  
+    inst_blocks ++; 
+  }
+
+
+
+
 
   if (!be_quiet) {
 
